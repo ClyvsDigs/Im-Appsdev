@@ -1,0 +1,113 @@
+services:
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+    image: motorcycle-api-app
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "php -r '$$socket = @fsockopen(\"127.0.0.1\", 9000); exit($$socket ? 0 : 1);'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    volumes:
+      - ./backend:/var/www/html
+      - motorcycle-storage:/var/www/html/storage/app/public
+    networks:
+      - motorcycle-network
+
+  web:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: nginx
+    image: motorcycle-api-web
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "8000:80"
+    volumes:
+      - ./backend/public:/var/www/html/public:ro
+      - ./backend/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - motorcycle-storage:/var/www/html/storage/app/public:ro
+    networks:
+      - motorcycle-network
+
+  db:
+    image: mysql:8.4
+    container_name: motorcycle-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-test_docker}
+      MYSQL_USER: ${DB_USERNAME:-laravel}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-secret}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - motorcycle-network
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: motorcycle-phpmyadmin
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "8080:80"
+    networks:
+      - motorcycle-network
+
+  frontend:
+    image: node:22-alpine
+    container_name: motorcycle-frontend
+    working_dir: /app
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      VITE_API_URL: http://localhost:8000/api
+      VITE_USE_MOCK: "false"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      web:
+        condition: service_started
+    networks:
+      - motorcycle-network
+
+networks:
+  motorcycle-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  motorcycle-storage:
+  frontend-node-modules:
